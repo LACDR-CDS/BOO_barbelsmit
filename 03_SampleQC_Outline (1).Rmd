@@ -1,0 +1,483 @@
+---
+title: "BOO 2025 - Example Analysis"
+subtitle: "Script 3: Sample QC - Questions"
+date: "`r Sys.Date()`" 
+author: 
+  Bärbel Smit
+output:
+  html_document:
+    code_download: true
+    theme: united
+    highlight: tango
+    df_print: paged
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+***
+
+> In this script, you will perform sample-level quality control (QC), removing any poor quality samples and ensuring that experimental replicates are comparable to one another. 
+
+***
+
+# Setup
+
+## Clean
+
+As before, we perform several setup steps at the start of the script to ensure our work is reproducible and clear. 
+
+**Exercise 1: Download the R markdown template and clean your environment:**
+
+```{r clean}
+# clean environment
+rm(list=ls())
+
+```
+
+***
+
+## Set variables
+
+**Exercise 2: Create the following objects in your R environment:**
+
+* `root_dir` - project folder
+* `count_path` - location of the `countData` object within the project folder
+* `cpm_path` - location of the `cpmData` object
+* `metadata_path` - location of the `metaData` object
+
+* `count_store` - location to save the `countData` object within the project folder
+* `cpm_store` - location to save the `cpmData` object
+* `metadata_store` - location to save the filtered `metaData` after QC
+
+* `count_threshold` - minimum library size required for samples (600,000; 20% of the target sequencing depth)
+* `corr_threshold` - required correlation between replicates (0.9)
+
+```{r set-variables}
+root_dir <- "C:/Users/Bärbel Smit/Universiteit Leiden/BOO 2025 - BOO CDS Giulia team - BOO CDS Giulia team/Students/Bärbel/project/barbelsmit_BOO/"
+
+count_path <- file.path(root_dir, "output", "countData_02QC.RData")
+metadata_path <- file.path(root_dir, "output", "metaData_02QC.RData")
+cpm_path <- file.path(root_dir, "output", "cpmData_02QC.RData")
+
+
+count_store <- file.path(root_dir, "output", "countData.Rdata")
+cpm_store <- file.path(root_dir, "output", "cpmData.Rdata" )
+metadata_store <- file.path(root_dir, "output", "metaData.Rdata" )
+
+#minimum library size required for samples 600,000
+count_threshold <- 6E5
+
+#required correlation between replicates 0.9
+corr_threshold <- 0.9 
+```
+
+***
+
+## Packages
+
+Here, we load `tidyverse` and also a new package:
+
+* `ggrepel` allows us labels in plots to "repel" each other and make visualizations clearer
+
+**Exercise 3: Load `tidyverse` and `ggrepel` into your environment:**
+
+```{r load-packages, warning=F, message=F}
+#loading packages
+library(tidyverse)
+library(ggrepel)
+
+```
+
+***
+
+## Load data
+
+**Exercise 4: Load the count data, CPM data, and metadata into your environment:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  Make sure these are the ones your saved at the end of the probe QC.
+
+</details>
+
+```{r load-data, warning=FALSE, message=FALSE}
+#load data
+load(count_path)
+load(cpm_path)
+load(metadata_path)
+
+```
+
+***
+
+# Library size
+
+## Check
+
+Before applying any filters, it is good to perform some checks.
+
+**Exercise 5: Check that the column names of `countData` match the `sample_ID` order in `metaData`:**
+
+```{r order-check}
+#Check to see if column names of countData match rownames of sample_ID in metaData
+table(metaData$sample_ID == colnames(countData))
+```
+They match (TRUE) and have the same amount of rows/columns (66).
+
+
+## Calculate
+
+**Exercise 6: Now that we have removed unreliable and lowly expressed probes from `countData`, recalculate and save a new `lib_size` in the metadata:**
+
+```{r calculate-lib}
+# Summarize the library size of metaData
+summary(metaData$lib_size)
+
+```
+```{r}
+# Calculate the total number of counts for each sample (column in countData) using colSums() and store these totals in a new column called lib_size in metaData
+metaData$lib_size <- colSums(countData)
+# Summarize the column
+summary(metaData$lib_size)
+```
+The library sizes are a bit smaller, but still comparable.
+***
+
+## Distribution
+
+**Exercise 7: Make a histogram of `lib_size`. What range of values does this variable take and is this reasonable for a TempO-Seq experiment?**
+
+```{r lib-histogram}
+# Summarize library size variable
+summary(metaData$lib_size)
+
+```
+```{r}
+metaData %>% 
+  # Create a histogram representing the library size on the X-axis
+  ggplot(aes(x = lib_size)) +
+  geom_histogram(fill = "#89CFF0", color = "black", bins = 30) +
+  ggtitle("Histogram of library size values") + 
+  xlab("Library size") +
+  theme_bw()
+```
+The library size indicates the total number of sequencing reads that were successfully produced and mapped to the TempO-Seq probe panel for each sample, regardless of the specific gene they are linked to.
+In these samples, the library size varies from 1,656,652 to 5,665,589 reads, with an average of 3,238,545 reads per sample. This range is typical for a TempO-Seq experiment, given that the assay is highly focused and efficient.
+
+
+## Flag
+
+Samples whose library size is below 20% of the targeted sequencing depth (`corr_threshold`; 600,000) should be flagged as having low reads.
+
+**Exercise 8: Create a flag in `metaData` describing if samples have low reads or not:**
+
+```{r lib-flag}
+metaData <- metaData %>% 
+  # If library size is under threshold (600,000) set as TRUE, otherwise FALSE
+  mutate(flagLowReads = ifelse(lib_size <= count_threshold, T, F))
+
+# This counts how many samples are labeled as having low reads (TRUE) versus not (FALSE)
+table(metaData$flagLowReads)
+
+```
+All samples pass the threshold and are kept in the data set, because they have sufficient reads.
+
+
+## Plot
+
+It is good to visualize the library size for each sample, grouped by compound ID. This shows us whether samples are well above the threshold, and allows us to inspect the data more carefully.
+
+**Exercise 9: Create a boxplot for the library sizes of each compound (including DMSO) and describe any patterns you identify:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  You can colour your boxplots by concentration to visualize patterns more clearly.
+
+</details>
+
+```{r lib-boxplot}
+metaData %>%   
+  # Set conc_ID as factor
+  mutate(conc_ID = factor(conc_ID)) %>%   
+  # Put compounds on x-axis and the library size on y-axis
+  ggplot(aes(x=compound_ID, y=lib_size)) + 
+  # Create boxplots of the library size distributions
+  geom_boxplot(aes(color=conc_ID), width=0.8) +  
+  # Create a dashed line to represent the library size threshold (600,000)
+  geom_hline(aes(yintercept=count_threshold), color="grey5", linetype="dashed") +
+  # Label any values below the threshold
+  geom_text_repel(aes(x = compound_ID, y = lib_size, color = conc_ID),   
+                   label=ifelse(metaData$lib_size < count_threshold, 
+                                metaData$rep, "")) +
+  # Set axis labels and title
+  xlab("") + ylab("Library size") + ggtitle("Library size distributions") +    
+  # Black and white theme 
+  theme_bw() 
+
+```
+The highest Theophylline concentration shows a slight reduction in library size, but nothing nearing the threshold. A lower library size can be e result of cytotoxicity, because of the cells dying, they yield less RNA and thus fewer available cells for the extraction under cytotoxic conditions. 
+
+
+# Replicate correlation
+
+## log2CPM
+
+The replicate correlation filter aims to remove any outlying replicates, with maximum pairwise correlations below the `corr_threshold` (set to 0.9). We usually perform this correlation analysis on the log2CPM values to ensure highly expressed genes do not have undue influence on the correlation values. A value of 1 is added to the CPM, to prevent issues arising from the fact that `log2(0)` is `-Inf`. 
+
+**Exercise 10: Calculate and store the log2(CPM + 1) values in a `logcpmData` object:**
+
+```{r log2cpm}
+# cpmData + 1 adds 1 to all CPM values to avoid taking log2(0), which is undefined and log2(...) applies a base-2 logarithm to each value and stored in a new data frame called logcpmData.
+logcpmData <- log2(cpmData + 1)
+
+```
+
+***
+
+## Pairwise correlations
+
+In order to calculate pairwise correlations, each sample needs to be compared to the other replicates in its experimental group. We can do this by looping through `mean_ID`.
+
+**Exercise 11: Calculate the pairwise replicate correlations for this data:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  The correlation can be calculated using `cor(cpmDataReps[,j], cpmDataReps[,k])` within an appropriate loop.
+
+</details>
+
+```{r pairwise-corr}
+# Set the replicate filter output as data frame
+replicateFilterOutput <- data.frame()
+
+# Loop through each unique condition
+for(i in unique(metaData$mean_ID)){
+  # Filters the metadata to samples from that condition
+  metaDataReps <- metaData %>% 
+    filter(mean_ID == i)
+  
+  # Subset the log-transformed CPM data to include only those samples
+  cpmDataReps <- logcpmData[, metaDataReps$sample_ID] 
+  
+  # Loops through every pair of samples within that condition 
+  for(j in 1:ncol(cpmDataReps)){
+    for(k in 1:ncol(cpmDataReps)){
+      sample_A <- colnames(cpmDataReps)[j]
+      sample_B <- colnames(cpmDataReps)[k]
+      
+      # Avoid calculating correlation between a sample and itself (which would always be 1) 
+      if(sample_A != sample_B){
+        # Calculate the Pearson correlation coefficient between two samples’ expression profiles
+        r2 <- cor(cpmDataReps[,j], cpmDataReps[,k])
+        
+        # Add the correlation result (r2) along with sample names and condition ID into a growing data frame called replicateFilterOutput
+        replicateFilterOutput <- rbind(
+          replicateFilterOutput, 
+          data.frame(mean_ID = i, 
+                     sample_A = sample_A,
+                     sample_B = sample_B,
+                     r2 = r2))
+      }
+    }
+  }
+}
+
+# Inspect the output of the first 6
+head(replicateFilterOutput)
+
+```
+
+The samples being compared are highly similar in their gene expression profiles (r2 = 0.97...).
+
+## Maximum
+
+Each sample is judged by the best pairwise correlation it can achieve. If this is below `corr_threshold`, the sample should be flagged.
+
+**Exercise 12: Calculate the `max_r2` for each sample and add it to the `replicateFilterOutput`:**
+
+```{r max-r2}
+replicateFilterOutput <- replicateFilterOutput %>% 
+  # Split sample_A by underscores, extracts the first two parts as Compound and Conc_ID, ignores the rest, and retains the original sample_A column by setting remove = FALSE
+  separate(sample_A, 
+           into = c("Compound", "Conc_ID", NA, NA), 
+           remove = F, 
+           sep = "_") %>% 
+  # If the compound name includes "DMSO", it trims it to the first 5 characters
+  mutate(Compound = ifelse(grepl("DMSO", Compound), substr(Compound,1,5), Compound)) %>% 
+  # Groups the data by each sample so operations like max() are done per sample
+  group_by(sample_A) %>%
+  # For each sample group, it calculates the maximum pairwise correlation (r2) that sample has with any other sample and stores it in max_r2
+  mutate(max_r2 = max(r2, na.rm = T)) %>% 
+  # Removes the grouping structure so future operations apply to the entire dataset, not per group
+  ungroup()
+
+# Inspect output
+summary(replicateFilterOutput$max_r2)
+
+```
+
+All correlations are close to 1,  meaning the replicates within each experimental condition are highly consistent.
+
+## Plot
+
+**Exercise 13: Visualize the pairwise replicate correlations for each experimental conditions. Describe what you observe:**
+
+```{r corr-boxplot}
+replicateFilterOutput %>% 
+  # Initialize a ggplot object using sample_A as the x-axis and r2 as the y-axis
+  ggplot(aes(x = sample_A, y = r2)) +
+  # Add boxplots showing the distribution of pairwise correlations for each sample
+  geom_boxplot(color = "grey80") +
+  # Overlay individual data points on the boxplots
+  geom_point(color = "grey60", size = 0.5) +
+  # Add highlighted points on the plot for the maximum pairwise correlation (max_r2) for each sample
+  geom_point(aes(y = max_r2, color = Conc_ID), 
+             size = 1.5) +
+  # Draw a line for the filter threshold (0.9)
+  geom_hline(aes(yintercept = corr_threshold), 
+             color = "grey60", linetype = "dashed") +
+  ylab("") + xlab("Sample ID") + ggtitle("Replicate correlations") +
+    # black and white theme
+   theme_bw() +
+  # Do not print sample names
+  theme(axis.text.x = element_blank()) +
+  # Make a different plot for each compound, allowing the x-axis to change for different samples
+  facet_wrap(~Compound, scales='free_x', nrow=2)
+
+```
+In the high-toxicity compound Theophylline, the highest concentration shows slightly lower replicate correlations compared to other concentrations. The reduced correlation at the highest concentration of Theophylline suggests increased variability between replicates at that dose, due to cytotoxic effects at high concentrations causing inconsistent cellular responses, low signal quality or degraded RNA in toxic conditions. However, this experimental condition is still suitable for downstream analysis being above the threshold.
+
+The replicate correlation of Metformin and the DMSO controls looks good and all samples can be kept in the data for analysis.
+
+***
+
+## Flag
+
+**Exercise 14: Flag any samples that did not pass the replicate correlation filter in the `metaData`:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  You can merge the replicate correlation filter output with the metaData to create a `max_r2` column after some processing.
+
+</details>
+
+```{r corr-flag}
+# From the replicateFilterOutput data frame, select the sample_A and max_r2 columns (renaming sample_A to sample_ID for consistency with metaData), and use distinct() to ensure each sample_ID appears only once with its corresponding max_r2
+replicateFilterMerge <- replicateFilterOutput %>% 
+  select(sample_ID = sample_A, max_r2) %>% 
+  distinct()
+
+# Perform a left join to merge replicateFilterMerge into metaData by sample_ID, adding the max_r2 column, and create a new column flagLowCorr that is TRUE if max_r2 is less than or equal to corr_threshold, and FALSE otherwise
+metaData <- left_join(metaData, replicateFilterMerge, 
+                      by = "sample_ID") %>% 
+  mutate(flagLowCorr = ifelse(max_r2 <= corr_threshold, T, F))
+
+table(metaData$flagLowCorr)
+
+```
+
+```{r}
+# Inspect the flagged samples
+metaData %>% 
+  filter(flagLowCorr)
+```
+
+None of the samples had a max_r2 less than or equal to `corr_threshold`.
+
+# Advanced questions
+
+If you would like a bit more of a challenge, here are a few extra questions relating to the two sample QC steps above. However, you can also skip these, save your data, and move on to the PCA.
+
+## Library size
+
+**Exercise 14: What are the benefits of a sample having a higher library size and does this benefit apply to some genes more than others?**
+
+
+
+
+***
+
+## Replicate correlation
+
+Instead of looking at pairwise correlations, another way of measuring how good a replicate is is by comparing it to the average for that experimental condition. 
+
+**Exercise 15: Calculate replicate correlation in this way and see if it alters the results of this filter. What is one benefit and downside of assessing replicate correlation in this manner?**
+
+
+
+
+
+***
+
+# Save
+
+**Exercise 16: Remove samples that did not pass the sample QC steps from your data:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  Don't forget to also subset the count and CPM data.
+
+</details>
+
+```{r any-flag}
+# Subset the metadata to keep only high quality samples
+metaData <- metaData %>% 
+  filter(!flagLowReads & !flagLowCorr)
+
+# Subset the count and CPM data
+cpmData <- cpmData[ , metaData$sample_ID]
+countData <- countData[ , metaData$sample_ID]
+
+# Check dimensions
+dim(metaData)
+```
+```{r}
+dim(countData)
+```
+```{r}
+dim(cpmData)
+```
+
+***
+
+## Save
+
+**Exercise 17: Save the updated data:**
+
+```{r save-metadata}
+# save
+save(countData, file=file.path(root_dir, "output/countData_03samp_QC.RData"))
+save(metaData, file=file.path(root_dir, "output/metaData_03_QC.RData"))
+save(cpmData, file=file.path(root_dir, "output/cpmData_03_QC.RData"))
+
+```
+
+***
+
+# Session Info
+
+**Exercise 18: Print your session info at the end of the script, knit the R markdown document, and push it to GitHub:**
+
+```{r session-info}
+#
+library(sessioninfo)
+
+session_info()
+```
+
+***
+
+That is the end of the Sample QC. Example answers will be available from the `BOO_template` GitHub on Tuesday. 
+
+Next, please move on to the PCA using `04_PCA_Outline.Rmd`.
+
+***
+
