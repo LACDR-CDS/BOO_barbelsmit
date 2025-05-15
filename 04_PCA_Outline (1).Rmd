@@ -1,0 +1,339 @@
+---
+title: "BOO 2025 - Example Analysis"
+subtitle: "Script 4: PCA - Questions"
+date: "`r Sys.Date()`" 
+author: 
+  Bärbel Smit
+output:
+  html_document:
+    code_download: true
+    theme: united
+    highlight: tango
+    df_print: paged
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+***
+
+> In this script, you will perform principal component analysis (PCA) to further explore patterns in the project data.
+
+***
+
+# Setup
+
+## Clean
+
+As before, we perform several setup steps at the start of the script to ensure our work is reproducible and clear. 
+
+**Exercise 1: Download the R markdown template, clean your environment, and set the following variables:**
+
+* `root_dir` - project folder
+* `cpm_path` - location of the `cpmData` object
+* `metadata_path` - location of the `metaData` object
+
+```{r clean}
+# clean environment
+rm(list=ls())
+
+```
+
+```{r}
+# Set variables
+root_dir <- "C:/Users/Bärbel Smit/Universiteit Leiden/BOO 2025 - BOO CDS Giulia team - BOO CDS Giulia team/Students/Bärbel/project/barbelsmit_BOO/"
+metadata_path <- file.path(root_dir, "output", "metaData_03samp_QC.RData")
+cpm_path <- file.path(root_dir, "output", "cpmData_03samp_QC.RData")
+```
+
+***
+
+## Packages
+
+Two new packages are introduced in this script:
+
+* `ComplexHeatmap` allows the drawing and annotation of heatmaps in R
+* `circlize` allows for the drawing of circular plots, but is also used by `ComplexHeatmap` for colour functions like `colorRamp2()`
+
+**Exercise 2: Load these packages alongside `tidyverse` into your R environment:**
+
+```{r load-packages, warning=F, message=F}
+#load packages
+library(tidyverse)
+library(ComplexHeatmap)
+library(circlize)
+
+```
+
+***
+
+## Load data
+
+**Exercise 3: Load the CPM and metadata into your R environment:**
+
+```{r load-data, warning=FALSE, message=FALSE}
+#load data
+load(cpm_path)
+load(metadata_path)
+
+```
+
+***
+
+# PCA
+
+## Calculate
+
+In high dimensional data (such as this data with around 10,000 genes), principal components (PCs) can be calculated and used to explore patterns. PCs can be thought of as a new axis in the data that captures the most variance possible in the fewest variables. Gives a more hollistic view. 
+
+**Exercise 4: Use the `prcomp()` function to calculate PCs of the `cpmData`:**
+
+```{r pca-calc}
+# store PCAresults as pcs
+# rcomp(): Performs PCA (Principal Component Analysis)
+#t(cpmData): Transposes the data so that the rows become samples and columns become genes. This is necessary because prcomp() expects rows = observations (samples) and columns = variables (genes).
+pcs <- prcomp(t(cpmData))
+
+```
+
+Tolerance (or `tol`) can be adjusted to create more or fewer PCs, where a lower tolerance generates a higher number. If this argument is not set, the PCs calculated will capture the full variability of the CPM data.
+
+***
+
+## Variance explained
+
+**Exercise 5: Use the output of `prcomp()` to explore your PCs and calculate the variance in CPM values that they explain:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  Variance explained is the SD squared divided by the sum of the variance for all PCs. 
+
+</details>
+
+```{r pc-summ}
+# summary PCs
+summary(pcs)
+
+```
+
+```{r}
+# Calculate variance explained
+var_explained =
+  data.frame(PC = 1:nrow(metaData),
+             # The standard deviation of each principal component is being squared (pcs$sdev^2) 
+             # Then normalizes the variance, so it gives the proportion of total variance explained by each PC
+             # Rounds to 3 decimal places
+             var_explained = round(pcs$sdev^2 / sum(pcs$sdev^2), 3))
+
+# Inspect the output
+var_explained
+```
+
+
+In this case, 66 principal components `pcs`were computed, collectively accounting for all the variability present in the CPM data, as indicated by the cumulative proportion.
+
+
+## Screeplot
+
+A screeplot can be used to visualize how each subsequent PC captures less and less of the total variance in the data.
+
+**Exercise 6: Plot the top 20 calculated PCs against the variance they explain to generate a screeplot:**
+
+```{r screeplot}
+var_explained %>% 
+  # Filter the data to include only the first 20 principal components
+  filter(PC <= 20) %>%
+  # Plot PC against variance explained
+  ggplot(aes(x = PC, y = var_explained)) +  
+  # Draw a line between the points
+  geom_line(color = "black") + 
+  # Draw points for each PC
+  geom_point(color = "black", fill = 'lightgreen', shape = 21, size = 3) +
+  # Label x axis at integer values between 1 and 20
+  scale_x_continuous(breaks = c(seq(1,20))) + 
+  xlab("Principal Component") + 
+  ylab("Proportion of variance explained") +
+  ggtitle("Screeplot of the first 20 PCs") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 8))
+
+```
+```{r}
+# See what pcs are above 1%
+var_explained %>% 
+  filter(var_explained > 0.01)
+```
+
+You can see that each of the top 9 PCs capture more than 1% of the variation in CPM data so we investigate these further.
+
+## Relation to known variables
+
+By investigating how PCs correlate with known variables, we can assess how much each factor impacts expression. 
+
+**Exercise 7: Add the PCs that explain more than 1% variance in CPM values to the metaData for further investigation:**
+
+```{r add-pc}
+# Add first 9 PCs to metadata
+metaData <- cbind(metaData, pcs$x[,1:9])
+
+```
+
+***
+
+Correlations between known factors and PCs can be calculated using the `cor()` function, which was used for the replicate correlation in the sample QC.
+
+**Exercise 8: Generate a matrix of correlations between PCs explaining over 1% of CPM variance and known factors**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  Variables that have a standard deviation above 0 will have a correlation of NA, so you may want to remove these.
+
+</details>
+
+```{r plot-vars, warning=F, message=F}
+# Applies a column-wise function to metaData, where each column is coerced to a factor (to handle categorical variables), converted to numeric (to assign codes), and then passed to sd(..., na.rm = TRUE) to compute the standard deviation, providing a measure of variability, even for categorical data.
+plot_vars <- apply(metaData, 2, function(x) sd(as.numeric(factor(x)), na.rm=T))
+
+# Filter out columns where the SD is NA or 0 (no variation)
+plot_vars <- names(plot_vars[!plot_vars %in% c(NA, 0)])
+
+# Remove any variable names containing "PC"
+plot_vars <- plot_vars[!grepl("PC", plot_vars)]
+
+# Inspect output
+plot_vars
+
+```
+```{r}
+# Creating a new data frame called heatmap_df, by selecting from metaData only the columns listed in plot_vars and using any_of() to include only those that exist
+heatmap_df <- metaData %>% 
+  select(any_of(plot_vars))
+```
+
+```{r}
+# Apply a function column-wise (each column = x).
+# Convert each column into a factor, then to numeric codes ensuring all variables are numeric, which is needed for correlation.
+heatmap_df <- apply(heatmap_df, 2, function(x) as.numeric(factor(x)))
+
+# Calculate the correlation between PCA scores for PCs 1–9 and scaled numeric metadata variables, using pairwise complete observations to handle missing data, and rounds the results to two decimal places
+cxy <- round(cor(pcs$x[,1:9], scale(heatmap_df), 
+                 use = "pairwise.complete.obs"), 2) 
+
+# Inspect correlations 
+as.data.frame(cxy)
+```
+
+
+
+Such a correlation matrix can be visualized using a heatmap.
+
+**Exercise 9: Create a heatmap of correlations between known factors and the selected PCs:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  `colorRamp2` can be used to generate a custom colour palette.
+
+</details>
+
+```{r heatmap}
+
+# Make a colour scale from -1 to 1
+col_fun <- colorRamp2(c(-1, 0, 1), c("#008080", "white", "#b3002d"))
+
+# Make a heatmap
+Heatmap(
+  t(cxy),         
+  # Use col_fun as color palette 
+  col = col_fun,  
+  # Add grey border to cells
+  border = 'grey5',
+  # Clusters the rows (metadata variables) but does not cluster columns (PCs)
+  cluster_columns = FALSE,            
+  show_row_dend = TRUE,             
+  show_column_dend = FALSE,    
+  # Set legend name 
+  name = "Corr",      
+  # Adjusts font size for row and column names
+  row_names_gp = gpar(fontsize = 8), 
+  column_names_gp = gpar(fontsize = 8), 
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    grid.rect(x, y, width, height, 
+              gp = gpar(col = "white", lwd = 1, fill = NA))
+    # Print correlation if it is above 0.4. The threshold of 0.4 is chosen as a cutoff to highlight only moderately strong correlations inside the heatmap cells
+    grid.text(ifelse(abs(t(cxy)[i,j]) > 0.4,
+                     sprintf("%.2f", round(t(cxy)[i, j], 2)),
+                     ""), 
+              x, y, gp = gpar(fontsize = 8, col = "white"))
+  }
+)
+
+```
+
+There is some correlation between PC2 and PC3. 
+
+## PCA plot
+
+**Exercise 10: Make a plot of two important PCs against each other, coloured by a relevant factor:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  You can use different shapes to visualize multiple factors in the same plot.
+
+</details>
+
+```{r pca-plot}
+metaData %>% 
+  # Plot PC2 on x-axis and PC3 on y-axis
+  ggplot(aes(x = PC2, y = PC3, 
+             # Give each compound class a different color and give each plate ID a different shape 
+             color = compound_class, shape=plate_ID)) +
+  geom_point(size = 2) +
+  # Add axis labels showing the percentage variance explained by PC2 and PC3 (pulled from var_explained data frame and rounded)
+  labs(x = paste0("PC2 (", round(100*var_explained[2,2], 2), "%)"), 
+       y = paste0("PC3 (", round(100*var_explained[3,2], 2), "%)"), 
+       color = "Class", shape = "Plate") +
+  # Set a title "PCA plot" and use a black-and-white theme
+  ggtitle("PCA plot") +
+  theme_bw()
+
+```
+
+There is clear evidence of a plate effect, which is not surprising given that the two compounds were processed on different plates. Nonetheless, the distinct compound classes also cluster separately, indicating they have different impacts on the transcriptome.
+
+# Advanced questions
+
+Sometimes a PCA plot can highlight important clusters in your data. Gene loadings can be used to assess which gene's expression is driving these clusters.
+
+**Exercise 11: Investigate a pattern in your data and identify what genes are responsible for it:**
+
+
+
+# Session Info
+
+**Exercise 12: Print your session info at the end of the script, knit the R markdown document, and push it to GitHub:**
+
+```{r session-info}
+# save
+save(metaData, file=file.path(root_dir, "output/metaData_04_PCA.RData"))
+save(cpmData, file=file.path(root_dir, "output/cpmData_04_PCA.RData"))
+
+```
+
+```{r}
+# session info
+library(sessioninfo)
+
+session_info()
+```
+
+***
+
+That is the end of the entire QC pipeline. Example answers will be available from the `BOO_template` GitHub on Tuesday. 
+
+***
