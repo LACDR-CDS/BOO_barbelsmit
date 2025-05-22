@@ -1,0 +1,777 @@
+---
+title: "BOO 2025 - Example Analysis"
+subtitle: "Script 5: Differential expression - Questions"
+date: "`r Sys.Date()`" 
+author: 
+  Bärbel Smit
+output:
+  html_document:
+    code_download: true
+    theme: united
+    lowlight: tango
+    df_print: paged
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+***
+
+> In this script, you will identify differentially expressed genes (DEGs) and visualize your results.
+
+***
+
+# Setup
+
+## Clean
+
+As before, we perform several setup steps at the start of the script to ensure our work is reproducible and clear. 
+
+**Exercise 1: Download the R markdown template, clean your environment, and set the following variables:**
+
+* `root_dir` - project folder
+* `count_path` - location of the `countData` object
+* `metadata_path` - location of the `metaData` object
+* `low_store` - location to store DEG results for the low toxicity compound
+* `high_store` - location to store DEG results for the high toxicity compound
+
+```{r}
+# clean environment
+rm(list=ls())
+```
+
+```{r clean}
+# set variable
+root_dir <- "C:/Users/Bärbel Smit/Universiteit Leiden/BOO 2025 - BOO CDS Giulia team - BOO CDS Giulia team/Students/Bärbel/project/barbelsmit_BOO/"
+metadata_path <- file.path(root_dir, "output", "metaData_04_PCA.RData")
+cpm_path <- file.path(root_dir, "output", "cpmData_04_PCA.RData")
+count_path <- file.path(root_dir, "output", "countData_03samp_QC.RData")
+
+low_store <- "DEG/DEGres_low.Rdata"
+high_store <- "DEG/DEGres_high.Rdata"
+```
+
+***
+
+## Packages
+
+In this script, we introduce a new package: `DESeq2`, a package that analyses count-based sequencing data, such as TempO-Seq, to identify differentially expressed genes between experimental conditions.
+
+**Exercise 2: Load `DESeq2`, `ggrepel`, and `tidyverse` into your R environment:**
+
+```{r load-packages, warning=F, message=F}
+#load packages
+library(tidyverse)
+library(ggrepel)
+library(DESeq2)
+
+```
+
+***
+
+## Load data
+
+**Exercise 3: Load the count and metadata into your R environment:**
+
+```{r load-data, warning=FALSE, message=FALSE}
+# loading data
+load(count_path)
+load(metadata_path)
+```
+
+***
+
+# DEG Analysis 
+
+## Mean ID
+
+In order to perform DEG analysis we need to ensure we have the correct `mean_ID` and `mean_ID_control` variables. These can be used to tell DESeq2 which samples to compare:
+
+* `mean_ID` is a group identifier, describing which treatment condition each sample belongs to
+* `mean_ID_control` is a control identifier, describing which control samples a group should be compared to
+
+In the case of our data we will have:
+
+* A `mean_ID` level for each experimental condition (7 concentrations for 2 compounds plus two plate-specific DMSO groups)
+* No `mean_ID_control` for the DMSO controls, but the appropriate DMSO control specified for the treated samples
+
+**Exercise 4: Identify these variables in your `metaData`:**
+
+```{r inspect}
+metaData %>% 
+  # Select the columns mean ID and mean ID control
+  select(mean_ID, mean_ID_control) %>% 
+  # Filter out the rows where mean ID control gives NA
+  filter(!is.na(mean_ID_control)) %>% 
+  # Remove duplicate rows 
+  distinct()
+
+```
+
+***
+
+## Contrast
+
+DESeq2 uses an object called a contrast, which details the comparisons that will be run. We often want to save several comparisons together in one object, such as all results for each compound together.
+
+**Exercise 5: Create a `contrast` data frame, including a variable `file_ID` which describes which file each comparison should be saved in:**
+
+```{r contrast}
+
+contrast <- metaData %>% 
+  # Keep only rows where a control is defined
+  filter(!is.na(mean_ID_control)) %>% 
+  # Select treatment and corresponding control group and also keep compound_ID, renamed to file_ID
+  select(mean_ID, mean_ID_control, file_ID = compound_ID) %>% 
+  # Remove duplicate rows
+  distinct
+
+# Show contrast
+contrast
+```
+
+***
+
+## Subsets
+
+We want to perform DEG analysis for each concentration of the low and high toxicity compounds.
+
+**Exercise 6: Subset `contrast` to include only the comparisons for the low toxicity compound and create a vector `levels` which can be used to loop through the selected `mean_ID`:**
+
+
+```{r levels}
+contrast_low <- contrast %>% 
+  # Keep only rows where the compound is CS1107
+  filter(file_ID == "CS1107")
+
+# Show output contrast low tox
+contrast_low
+
+```
+
+```{r}
+# Show all the unique treatment groups (mean_IDs) associated with the compound "CS1107" from contrast_low data frame
+levels <- unique(contrast_low$mean_ID)
+
+levels
+```
+
+***
+
+Before looping through `levels`, let's go through the steps required to perform a DEG analysis.
+
+**Exercise 7: Using the first value in `levels`, subset the `contrast`, `countData`, and `metaData` to include only the relevant samples:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  Make sure you create new objects, such as `countData_sub` and `metaData_sub` to prevent overwriting the full data frame.
+
+</details>
+
+
+```{r subset}
+# Set i to the first treatment group from the levels vector
+i <- levels[1]
+i
+```
+```{r}
+# Filter contrast_low to extract the row corresponding to the first treatment group (i) for the compound CS1107
+contrast_sub <- contrast_low %>% 
+  filter(mean_ID == i)
+contrast_sub
+```
+```{r}
+# Filter metaData to create metaData_sub, containing only the samples that belong to either the treatment group (mean_ID) or its corresponding control group (mean_ID_control) specified in contrast_sub
+metaData_sub <- metaData %>% 
+  filter(mean_ID %in% c(contrast_sub$mean_ID, contrast_sub$mean_ID_control))
+metaData_sub
+```
+```{r}
+# Subset the countData to include only the columns (samples) listed in metaData_sub$sample_ID, creating countData_sub, which contains count data only for the treatment and control samples relevant to the current contrast
+countData_sub <- countData[ , metaData_sub$sample_ID]
+countData_sub[1:10, ]
+```
+
+
+***
+
+## Fit models
+
+Now that we have subset our data, we can use it to create a DESeq object (`dds`). This also requires us to set our `design`, or model formula. In our data, this will be a simple comparison of two levels of `mean_ID`.
+
+**Exercise 8: Use the `DESeqDataSetFromMatrix()` function to create a `dds` object:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  Designs are a special type of object in R, the formula, which is specified using a tilde (e.g. `~ mean_ID`).
+
+</details>
+
+
+```{r fit}
+# Create a DESeq2 dataset object 
+dds <- DESeqDataSetFromMatrix(
+  countData = countData_sub,
+  colData = metaData_sub,
+# Specify that gene expression differences will be tested based on the treatment group (mean_ID)
+  design = ~ mean_ID
+)
+```
+
+***
+
+Next, we use the `DESeq()` function to:
+
+1. Calculate **size factors** using the median ratio method, which normalizes for differences in sequencing depth or library size across samples. The motivation is similar to CPM normalization, but each sample is instead compared to a pseudo-reference sample composed of the geometric mean of all genes. 
+2. Estimate **dispersions** (biological variability) for each gene across replicates, in order to properly quantify confidence in results (which will be lower for highly variable genes).
+3. Fit a **generalized linear model** (GLM) for each gene, using a negative Binomial distribution. This takes the normalized counts (from size factors), design formula, and estimated dispersion to produce log2 fold changes (log2FC), standard errors (SEs), and p-values.
+
+The output object, `dds`, contains all the model fits and is ready for extracting results.
+
+**Exercise 9: Use the `DESeq()` function to update the `dds` object and include all specified model fits:**
+
+```{r deseq}
+# Run DESeq2 analysis on dataset dds
+dds <- DESeq(dds)
+```
+```{r}
+dds 
+```
+
+***
+
+## Extract results
+
+Results can be extracted from a `dds` object using the `results()` function. However, we additionally apply shrinkage to our results. **Shrinkage** pulls extreme or noisy log2FC towards zero when they are not well supported by the data, usually due to:
+
+* Low expression levels
+* High dispersion (biological variability)
+* Small sample sizes
+
+Shrunk log2FC are more stable and realistic, especially in these scenarios. **Normal** shrinkage uses a Normal prior distribution (bell curve with its peak at 0), which assumes that most genes are not differentially expressed and encourages smaller fold changes unless there is strong evidence to the contrary. 
+
+The final log2FCs are then a posterior estimate that combines:
+
+* The observed data, and
+* The prior (Normal distribution centered at 0)
+
+**Exercise 10: Use `lfcShrink()` to extract results for the selected comparison:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  You will get a warning using normal shrinkage, but our experience suggests that it is the best method for these simpler designs.
+
+</details>
+
+
+```{r shrinkage}
+# Shrink the estimated fold changes between the treatment (contrast_sub$mean_ID) and its control (contrast_sub$mean_ID_control) to produce more stable and reliable estimates, in particular for genes with low counts or high variability
+res_low <- lfcShrink(dds, 
+                 contrast = c("mean_ID",
+                              contrast_sub$mean_ID,
+                              contrast_sub$mean_ID_control),
+                 type="normal")
+```
+```{r}
+# Display the first rows of the shrunken differential expression results, showing key information(log2 fold change, standard errors, statistical test statistics, p_values ans adjusted p-values)
+head(res_low)
+
+```
+- `baseMean`: The average normalized expression level of a gene across all samples, showing how much the gene is expressed overall
+- `log2FoldChange`: The log base 2 of the fold change in expression between two groups (treatment vs. control). Positive means higher in treatment, negative means lower
+- `lfcSE`: The standard error of the log2 fold change estimate, indicating how precise the fold change measurement is (uncertainty)
+- `stat`: The test statistic value used to assess whether the log2 fold change is significantly different from zero
+- `pvalue`: The probability of observing the data if there were actually no difference between groups, smaller values suggest stronger evidence against no change
+- `padj`: The p-value adjusted for multiple testing, controlling the false discovery rate to reduce false positives when testing many genes
+
+
+**Exercise 11: Wrangle the output to additional columns:**
+
+* `gene_symbol` containing the gene names
+* `mean_ID` containing the mean ID of the treated samples
+* `mean_ID_control` containing the mean ID of the control samples
+
+```{r results}
+# Convert DESeq2 results res_low into a data frame
+res_low <- data.frame(res_low) %>% 
+# Move the gene names from row names into a new column called "gene_symbol"
+  rownames_to_column(var = "gene_symbol") %>% 
+# Add the mean_ID and mean_ID_control columns to label the treatment and control groups
+  mutate(
+    mean_ID = contrast_sub$mean_ID,
+    mean_ID_control = contrast_sub$mean_ID_control
+  )
+# Show first rows
+head(res_low)
+```
+
+***
+
+## Loop
+
+Using a `for` loop, you can run each of these steps for every required comparison.
+
+**Exercise 12: Loop through the remaining values of the `levels` variable to add all of the comparisons for the low toxicity compound to your `res` object:**
+
+```{r loop}
+# Select the current treatment-control pair from contrast_low 
+for(i in levels[-1]){
+  contrast_sub <- contrast_low %>% 
+    filter(mean_ID == i)
+  # Keep samples only from this treatment and its control group
+  metaData_sub <- metaData %>% 
+    filter(mean_ID %in% c(contrast_sub$mean_ID, contrast_sub$mean_ID_control))
+  # Filter countData to include only the relevant samples
+  countData_sub <- countData[ , metaData_sub$sample_ID]
+# Build a DESeqDataSet object with the subsetted counts and metadata
+  dds <- DESeqDataSetFromMatrix(
+    countData = countData_sub,
+    colData = metaData_sub,
+    design = ~ mean_ID)  
+  # Run DESeq
+  dds <- DESeq(dds)
+  # Get stable fold changes, by shrinking, for the treatment vs control. Convert results to a data frame, add gene symbols and group info. Combine results in res_low
+  res_low <- rbind(res_low, 
+    data.frame(lfcShrink(dds, 
+                 contrast = c("mean_ID",
+                              contrast_sub$mean_ID,
+                              contrast_sub$mean_ID_control),
+                 type="normal")) %>% 
+    rownames_to_column(var = "gene_symbol") %>% 
+    mutate(
+      mean_ID = contrast_sub$mean_ID,
+      mean_ID_control = contrast_sub$mean_ID_control))
+}
+```
+```{r}
+# Show first rows
+head(res_low)
+```
+```{r}
+# Show dimensions of res_low
+dim(res_low)
+```
+rows: Each row represents a gene in one treatment-vs-control comparison
+columns: Includes the columns gene_symbol, baseMean, log2FoldChange, lfcSE, stat, pvalue, padj, plus the added mean_ID and mean_ID_control
+
+
+
+**Exercise 13: Perform DEG analysis for the high toxicity compound, saving the output in `res_high`:**
+
+First, we make the contrast for the high toxicity compound and save the levels:
+
+```{r high-contrast}
+# Keep only rows where the compound is CS1130
+contrast_high <- contrast %>% 
+  filter(file_ID == "CS1130")
+# Show output contrast high tox
+contrast_high
+
+```
+```{r}
+# Show all the unique treatment groups (mean_IDs) associated with the compound "CS1130" from your contrast_high data frame
+levels <- unique(contrast_high$mean_ID)
+
+levels
+```
+
+Then, we loop through `levels` and save results:
+
+```{r high-loop}
+
+res_high <- data.frame()
+# Select the current treatment-control pair from contrast_high
+for(i in levels){
+  contrast_sub <- contrast_high %>% 
+    filter(mean_ID == i)
+  # Keep samples only from this treatment and its control group
+  metaData_sub <- metaData %>% 
+    filter(mean_ID %in% c(contrast_sub$mean_ID, contrast_sub$mean_ID_control))
+  # Filter countData to include only the relevant samples
+  countData_sub <- countData[ , metaData_sub$sample_ID]
+# Build a DESeqDataSet object with the subsetted counts and metadata
+  dds <- DESeqDataSetFromMatrix(
+    countData = countData_sub,
+    colData = metaData_sub,
+    design = ~ mean_ID)  
+  # Run DESeq
+  dds <- DESeq(dds)
+  # Get stable fold changes, by shrinking, for the treatment vs control. Convert results to a data frame, add gene symbols and group info. Combine results in res_high
+  res_high <- rbind(res_high, 
+    data.frame(lfcShrink(dds, 
+                 contrast = c("mean_ID",
+                              contrast_sub$mean_ID,
+                              contrast_sub$mean_ID_control),
+                 type="normal")) %>% 
+    rownames_to_column(var = "gene_symbol") %>% 
+    mutate(
+      mean_ID = contrast_sub$mean_ID,
+      mean_ID_control = contrast_sub$mean_ID_control))
+}
+
+```
+
+```{r}
+# Show first rows
+head(res_high)
+```
+
+```{r}
+# Show dimensions of res_high
+dim(res_high)
+```
+
+***
+
+# Defining DEGs
+
+## Thresholds
+
+There are many ways to define a differentially expressed gene based either on the log2 fold change (log2FC, which reflects the effect size), the adjusted p-value (which reflects the statistical significance after correcting for multiple testing), or a combination of both. For example, some studies may define a gene as differentially expressed if it has an adjusted p-value below 0.05, indicating high statistical confidence, while others may require an absolute log2FC above log2(1.2) (i.e., a twenty percent change) to ensure the change is also biologically meaningful. Combining both criteria helps balance sensitivity and specificity, reducing the chance of identifying genes that are statistically but not biologically relevant, or vice versa.
+
+**Exercise 14: Create two new variables `dir` and `sig` that describe each gene's significance (T/F) and direction of effect (up/down):**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  Don't forget to do it for the high and low toxicity compounds.
+
+</details>
+
+```{r sig-dir}
+# Add new columns dir en sig to res_high
+res_high <- res_high %>% 
+  mutate(
+# Up when lo2FC is positive and Down when its negative
+    dir = ifelse(log2FoldChange < 0, "Down", "Up"),
+# Flags whether a gene is significantly differentially expressed based on: padj <= 0.05 and FC greater than 20% (TRUE). FALSE is otherwise
+    sig = ifelse(padj <= 0.05 & abs(log2FoldChange) > log2(1.2), TRUE, FALSE)
+  )
+
+table(res_high$sig, res_high$dir, useNA="always")
+```
+
+
+```{r}
+# Add new columns dir en sig to res_low
+res_low <- res_low %>% 
+  mutate(
+# Up when lo2FC is positive and Down when its negative
+    dir = ifelse(log2FoldChange < 0, "Down", "Up"),
+# Flags whether a gene is significantly differentially expressed based on: padj <= 0.05 and FC greater than 20% (TRUE). FALSE is otherwise
+    sig = ifelse(padj <= 0.05 & abs(log2FoldChange) > log2(1.2), TRUE, FALSE)
+  )
+
+table(res_low$sig, res_low$dir, useNA="always")
+```
+When comparing the significantly expressed genes (marked as TRUE) between the low and high resolution groups, the low resolution group shows a notably larger number of genes passing the significance threshold. In particular, there are only 504 differentially expressed genes (either up- or down-regulated) in the high resolution group, while there are up to 3,566 in the low resolution group.
+
+## Save
+
+It is important to save output of analyses locally, especially when they can be quite lengthy to rerun. This will save you considerable time later in the project. 
+
+**Exercise 15: Save the results using the path variables you created at the start of the script:**
+
+```{r save}
+# save results
+save(res_low, file=paste0(root_dir, low_store))
+save(res_high, file=paste0(root_dir, high_store))
+
+```
+
+
+
+# Plots
+
+## Dose-response plots
+
+One of the plots that is useful to make following DEG analysis is visualization of any dose response effects. In order to ensure that all data point are plotted correctly, it is helpful to create a base data frame for all the direction, concentration combinations.
+
+**Exercise 16: Create a data frame `plot_df` with all compound, concentration, and direction combinations:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  It may be helpful to `rbind()` your high and low toxicity compound results together for visualizations.
+
+</details>
+
+```{r ref-df}
+# Combine res_high and res_low into a single data frame called res
+res <- rbind(res_high, res_low)
+
+plot_df <- res %>% 
+# Keep only rows where the dir column is not NA
+  filter(!is.na(dir)) %>% 
+# Keeps only two columns: mean ID and dir
+  select(mean_ID, dir) %>% 
+# Remove any duplicate rows
+  distinct()
+# The resulting plot_df is data frame containing only the gene IDs and their direction of differential expression
+plot_df
+
+```
+
+***
+
+Using `mean_ID` and `separate()`, you can extract information about the compound and concentration of each experimental group.
+
+**Exercise 17: Create a data frame containing the number of DEGs, concentration, and compound, for each experimental condition and direction:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  Don't forget to set the number of DEGs to 0, where appropriate. 
+
+</details>
+
+```{r plot-df}
+
+plot_df <- res %>% 
+  # Keep only rows where the result is statistically significant and the direction of change is defined
+  filter(sig == TRUE & !is.na(dir)) %>% 
+  # Group data by mean ID and dir
+  group_by(mean_ID, dir) %>%
+  # Create a new column n that counts how many significant results exist for each unique combination of mean_ID and dir
+  summarize(n = n(), .groups = "drop") %>% 
+  # Joins this summary with the original plot_df
+  right_join(y = plot_df, by = c("mean_ID", "dir")) %>% 
+  # Replace any NA values in the count column with zeros
+  mutate(n = ifelse(is.na(n), 0, n)) %>% 
+  # Split the mean_ID column
+  separate(mean_ID, sep="_", into=c("Compound", "Conc_ID", NA), remove=F)
+
+plot_df
+```
+
+***
+
+**Exercise 18: Plot the number of DEGs across concentrations for the two compounds. Do you see a dose-response?**
+
+```{r dose-response}
+#
+plot_df %>% 
+  mutate(n = ifelse(dir == "Down", -n, n)) %>% 
+  ggplot(aes(x=Conc_ID, y=n, fill=dir)) +
+  geom_col() +
+  geom_hline(aes(yintercept=0)) +
+  theme_bw() +
+  facet_wrap(~Compound ,scales="free_x") 
+
+```
+Analyzing Theophylline's (CS1130) dose-response plot requires taking into account the drug's pharmacodynamics and sample collection timing.  Many of theophylline's actions, including adenosine receptor antagonism and cAMP-PKA activation, happen quickly after delivery because it is a fast-acting drug.  Therefore, at the 24-hour mark, early or transient gene expression responses—especially those involving immediate-early genes—may already have normalized.  Likewise, drug-induced short-lived signaling events might have ended, therefore sampling at 24 hours might completely miss these acute molecular reactions.
+
+Furthermore, looking at the mechanism of action (MoA), it does not directly interact with certain genes. Many of the effects of Theophylline involve post-transcriptional, post-translational, or signaling-based regulation, explaining why they are not captured in a standard DEG dataset. To draw meaningful conclusions on the impact of the drug, more analysis must be done at the systems level which integrates gene expression with pathways, protein activity, and cellular context. 
+
+
+
+
+## Volcano plots
+
+A volcano plot is useful to visualize effect sizes and significance of each gene in one plot, by plotting log2 fold changes (x-axis) against -log10 p-values (y-axis).
+
+**Exercise 19: Create volcano plots for each of the compounds:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  If you want to plot all concentrations, it may be sensible to create distinct plots for the two compounds. However, you could also plot only the top concentration volcano plot, if the dose response is suggestive that this would be more informative. 
+
+</details>
+
+```{r volcano}
+#
+for(i in unique(metaData$compound_ID)[1:2]) {
+  print(res %>% 
+          separate(mean_ID, sep="_", into=c("Compound", "Conc_ID", NA), remove=F) %>% 
+          filter(!is.na(sig) & Compound == i) %>% 
+          mutate(log10p = -log10(pvalue)) %>% 
+          ggplot(aes(x = log2FoldChange, y = log10p)) +
+          geom_point(aes(color=sig), size=0.5) +
+          geom_text_repel(aes(label = ifelse(padj < 1E-4, gene_symbol, NA)),
+                    color="dodgerblue", size=2) +
+          xlim(-max(abs(res$log2FoldChange), na.rm=T), max(abs(res$log2FoldChange), na.rm=T)) +
+          scale_color_manual(values = c("grey", "dodgerblue")) +
+          theme_bw() + 
+          ggtitle(i) +
+          facet_wrap(~Conc_ID))
+}
+```
+
+CS1107 at highest concentration: 
+- CTNND1: Linked to cell adhesion and epithelial integrity. 
+- PALLD: Is involved in the modulation of the actin cytoskeleton
+- MSMO1: Enzyme involved in cholesterol biosynthesis.
+- KRT7: Helps maintain the structural integrity of epithelial cells, particularly simple epithelia lining internal organs, glands, and ducts, while also contributing to epithelial cell differentiation and protecting cells from mechanical stress. Altered expression can be linked to cancer progression and tissue remodeling. Commonly used as a marker in pathology to identify certain epithelial tissues and tumors
+- FGF2: Involved in regulation of actin cytoskeleton. 
+
+CS1130 at highest concentrations:
+- TAT (Tyrosine aminotransferase): A classic liver-enriched gene, key in amino acid metabolism. Its expression is tightly regulated by liver hormones and stress. Downregulation is often a marker of liver dysfunction.
+- RASD1: Regulates circadian rhythms, stress response, and cell proliferation
+- SDS: A liver-enriched enzyme involved in amino acid metabolism. Expression is sensitive to hepatocellular injury and nutrient stress.
+- SIK1: Regulates metabolic pathways; implicated in gluconeogenesis. May play a role in hepatic metabolism and response to metabolic stress.
+- PNPLA6: involved in glycerophospholipid metabolism 
+- PALM3: Membrane-associated protein involved in cytoskeleton dynamics. Plays a role in cell shape and plasma membrane organization
+- ALDH8A1: Plays a role in detoxifying aldehydes and in biosynthetic pathways. Altered expression can affect metabolic and detoxification pathways. 
+
+Metformin: 
+- At the lowest concentration, there are a few significant DEGs with a low log2FC
+- Concentrations 2-6 show almost no significant DEGs, which is in line with the expectations
+- Concentration 7 shows a large number of significant DEGs with a high effect size  
+
+Theophylline: 
+- Over all concentrations there are only a few significant DEGs with almost all of them having a low log2FC between 0-1
+- The highest concentrations does show some DEGs with a larger log2FC, with most of them being upregulated 
+
+
+***
+
+## MA plots
+
+One feature that volcano plots miss is the baseline expression of genes. This can mean that very lowly expressed genes appear important (due to high significance and effect sizes). Visualizing results using an MA plot, which plots log2 base mean (y-axis) against log2 fold changes (x-axis), can be helpful to distinguish between noisy genes and biologically relevant ones.
+
+**Exercise 20: Create MA plots for the two compounds. Outline your findings:**
+
+```{r ma}
+#
+for(i in unique(metaData$compound_ID)[1:2]) {
+  print(res %>% 
+          separate(mean_ID, sep="_", into=c("Compound", "Conc_ID", NA), remove=F) %>% 
+          filter(!is.na(sig) & Compound == i) %>% 
+          mutate(log2baseMean = log2(baseMean)) %>% 
+          ggplot(aes(x = log2baseMean, y = log2FoldChange)) +
+          geom_point(aes(color=sig), size=0.5) +
+          geom_text_repel(aes(label = ifelse(padj < 1E-4, gene_symbol, NA)),
+                    color="dodgerblue", size=2) +
+          ylim(-max(abs(res$log2FoldChange), na.rm=T), max(abs(res$log2FoldChange), na.rm=T)) +
+          scale_color_manual(values = c("grey", "dodgerblue")) +
+          theme_bw() + 
+          ggtitle(i) +
+          facet_wrap(~Conc_ID))
+}
+```
+Metformin:
+- The lowest concentration shows a few DEGs with a significant biological response 
+- The  concentrations 2-6 show almost no DEGs that indicate a significant biological response 
+- The highest concentration shows a large number of DEGs that have a significant biological response 
+
+Theophylline:
+- There are not many DEGs that show a strong biological responses across all the concentrations 
+
+
+***
+
+# Advanced question
+
+## Gene level plots
+
+It can also be useful to plot individual gene results, especially to investigate gene-level dose responses.
+
+**Exercise 21: Plot the top 16 genes for each of the compounds in a dose-response plot. Are there any genes with particular relevance to hepatotoxicity?**
+
+```{r high-gene}
+# Get the top 16 unique gene symbols from the res_high data frame, sorted by the lowest adjusted p-values (padj), indicating the most statistically significant genes in a high-expression condition
+top_high <- unique((res_high %>% arrange(padj))$gene_symbol)[1:16]
+top_high
+```
+```{r}
+res_high %>% 
+  filter(gene_symbol %in% top_high) %>% 
+  separate(mean_ID, sep="_", into=c('comp', 'c', NA), remove=F) %>% 
+  ggplot(aes(x=c, y=log2FoldChange)) +
+  geom_point() +
+  geom_line(aes(group=gene_symbol)) +
+  facet_wrap(~gene_symbol) +
+  theme_bw()
+```
+Theophylline
+Genes involved in:
+- The metabolic functions of the liver, with an emphasis on amino acid metabolism, energy production, and lipid homeostasis.
+- Regulating stress through circadian regulation and stress response.
+- Maintaining cell structure and membrane integrity
+- Regulating detoxification
+
+
+```{r}
+# Get the top 16 unique gene symbols from the res_low data frame, sorted by the lowest adjusted p-values (padj), indicating the most statistically significant genes in a high-expression condition
+top_low <- unique((res_low %>% arrange(padj))$gene_symbol)[1:16]
+top_low
+```
+```{r}
+res_low %>% 
+  filter(gene_symbol %in% top_low) %>% 
+  separate(mean_ID, sep="_", into=c('comp', 'c', NA), remove=F) %>% 
+  ggplot(aes(x=c, y=log2FoldChange)) +
+  geom_point() +
+  geom_line(aes(group=gene_symbol)) +
+  facet_wrap(~gene_symbol) +
+  theme_bw()
+```
+
+Metformin
+Genes involved in:
+- Maintaining the structure and stability of epithelial cells
+- Actin cytoskeleton regulation 
+- Cholesterol biosynthesis
+- Cell adhesion  
+
+
+```{r}
+# Get the first 16 unique gene symbols (with the smallest adjusted p-values) from sample "CS1107_1_P2" in the res_low dataset.
+bottom_low <- res_low %>%
+  filter(mean_ID == "CS1107_1_P2") %>%
+  arrange(padj) %>%
+  pull(gene_symbol) %>%
+  unique() %>%
+  head(16)
+bottom_low
+```
+
+
+```{r}
+res_low %>% 
+  filter(gene_symbol %in% bottom_low) %>% 
+  separate(mean_ID, sep="_", into=c('comp', 'c', NA), remove=F) %>% 
+  ggplot(aes(x=c, y=log2FoldChange)) +
+  geom_point() +
+  geom_line(aes(group=gene_symbol)) +
+  facet_wrap(~gene_symbol) +
+  theme_bw()
+```
+The genes identified in the lowest concentration group show the highest statistical significance and correspond to the first peak in the dose-response plot. This pattern is consistent with a hormetic response, where low doses of a compound like metformin trigger beneficial adaptive signaling, while higher doses begin to overwhelm cellular systems.
+
+Energy metabolism and mitochondrial function are two important areas of influence.  As a result of Metformin's recognized inhibition of mitochondrial Complex I, AMP builds up, activating AMPK and suppressing mTOR signaling.  The expression of genes like **NDUFV2**, a Complex I subunit, **ATP5MG**, a component of Complex V, and **ECHS1**, which is involved in fatty acid β-oxidation, reflects this cascade.  Furthermore, a compensating response to the energy and redox challenges imposed by mitochondrial inhibition is suggested by **TXNDC17**, a gene associated with the regulation of oxidative stress.
+
+Evidence of altered protein production is also present.  An adjustment in translational activity is shown by the upregulation or modulation of **RPS29**, a ribosomal protein, and **YWHAE**, a crucial component of 14-3-3 signaling. This is most likely the result of AMPK-mediated inhibition of mTOR under energy-restricted settings.
+
+ Notable indicators of inflammation, cell death, and stress response are also present.  Immune modulation is indicated by the presence of **GSDMB**, a mediator of pyroptosis, **IL18BP**, a cytokine inhibitor, and **S100A10**, linked to inflammatory processes.  The documented anti-inflammatory benefits of metformin, which are especially critical in disease states like cancer or metabolic syndrome, may be caused by these alterations.
+
+Additionally, a number of genes point to changes in more general metabolic pathways.  For example, the detoxification-related enzyme **ESD**, the retinol and lipid metabolism-regulating enzyme **RBP4**, and the ion-regulation and membrane-organizing enzyme **STOM** all show altered metabolite handling, which may be due to alterations in lipid metabolism and redox balance brought on by metformin exposure.
+
+ Genes like **PHRF1**, **EID3**, and once again **YWHAE** are implicated in transcriptional and epigenetic control on a regulatory level, indicating that AMPK activation has downstream effects that affect gene expression programs more generally.
+
+In addition, the presence of primate-specific genes **NPIPB3** and **NPIPA5** that have unknown roles could be a result of alterations in nuclear-cytoplasmic transport or overall cellular stress.  Because of their diversity and possible cellular state responsiveness, they are commonly found in RNA-seq datasets, despite the fact that their roles are little understood.
+
+ A hormetic paradigm in which initial stress triggers advantageous modulation across metabolism, inflammation, protein synthesis, and gene regulation is supported by the collective gene expression patterns, which collectively paint a complete picture of adaptive cellular reprogramming at low metformin dosages.
+
+
+# Session Info
+
+```{r session-info}
+library(sessioninfo)
+
+session_info()
+
+```
+
+***
+
+This is the end of the differential gene expression analysis. Next, please move on to functionally interpret your results using over-representation analysis in `06_ORA_Outline.Rmd`. Example answers will be available from the GitHub at EOB on Friday.
+
+***
+
