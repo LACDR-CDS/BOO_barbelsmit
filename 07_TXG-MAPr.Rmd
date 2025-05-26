@@ -1,0 +1,121 @@
+---
+title: "BOO 2025 - Example Analysis"
+subtitle: "Script 7: TXG-MAPr import - Answers"
+date: "`r Sys.Date()`" 
+author: 
+  Bärbel Smit
+output:
+  html_document:
+    code_download: true
+    theme: united
+    lowlight: tango
+    df_print: paged
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+***
+
+> In this script, you will export your log2FC in a format suitable for upload to the PHH TXG-MAPr.
+
+***
+
+# Setup
+
+## Clean
+
+As before, we perform several setup steps at the start of the script to ensure our work is reproducible and clear. 
+
+**Download the R markdown template, clean your environment, set variables, and load in `tidyverse`:**
+
+* `root_dir` - project folder
+* `low_store` - location of DEG results for the low toxicity compound
+* `high_store` - location of DEG results for the high toxicity compound
+
+```{r clean}
+# Clean environment
+rm(list=ls())
+
+# set variables 
+root_dir <- "C:/Users/Bärbel Smit/Universiteit Leiden/BOO 2025 - BOO CDS Giulia team - BOO CDS Giulia team/Students/Bärbel/project/barbelsmit_BOO/"
+
+
+low_store <- "DEG/DEGres_low.Rdata"
+high_store <- "DEG/DEGres_high.Rdata"
+
+txg_store <- "TXG_upload"
+
+# Load packages
+library(tidyverse)
+```
+
+***
+
+## Load data
+
+**Load the DEG results R environment:**
+
+```{r load-data, warning=FALSE, message=FALSE}
+load(paste0(root_dir, high_store))
+load(paste0(root_dir, low_store))
+```
+
+***
+
+# Upload
+
+## File format
+
+Upload files to the TXG-MAPr need the following variables:
+
+* `experiment` defines the experiment (mean_ID). You will be able to look at map activation for each experiment separately.
+* `gene_id` defines the gene ID (gene_symbol)
+* `time` defines the time of exposure (24 hours for these samples)
+* `conc` defines the concentration (dose level)
+* `log2fc` specifies the log2 fold change
+* `pvalue` defines the p-value
+* `padj` defines the adjusted p-value
+
+**Make the data frame and save it as a text file:**
+
+Making text files to calculate EG scores
+
+```{r}
+txg_high <- res_high %>% 
+  separate(mean_ID, sep="_", into=c("Compound", "conc", NA), remove=F) %>% 
+  mutate(time = 24) %>% 
+  select(
+    experiment = Compound,
+    gene_id = gene_symbol,
+    time, conc, log2fc = log2FoldChange, pvalue, padj)
+
+write_tsv(txg_high, path=paste0(root_dir, txg_store, "_high.txt"))
+
+txg_low <- res_low %>% 
+  separate(mean_ID, sep="_", into=c("Compound", "conc", NA), remove=F) %>% 
+  mutate(time = 24) %>% 
+  select(
+    experiment = Compound,
+    gene_id = gene_symbol,
+    time, conc, log2fc = log2FoldChange, pvalue, padj)
+
+write_tsv(txg_low, path=paste0(root_dir, txg_store, "_low.txt"))
+```
+
+These can then be imported into the PHH TXG-MAPr and explored. 
+
+***
+
+# Session Info
+
+```{r session-info}
+library(sessioninfo)
+
+session_info()
+```
+
+***
+

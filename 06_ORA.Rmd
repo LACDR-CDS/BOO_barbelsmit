@@ -1,0 +1,401 @@
+---
+title: "BOO 2025 - Example Analysis"
+subtitle: "Script 6: Functional enrichment"
+date: "`r Sys.Date()`" 
+author: 
+  Bärbel Smit
+output:
+  html_document:
+    code_download: true
+    theme: united
+    lowlight: tango
+    df_print: paged
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+***
+
+> In this script, you will biologically interpret your differentially expressed genes.
+
+***
+
+# Setup
+
+## Clean
+
+As before, we perform several setup steps at the start of the script to ensure our work is reproducible and clear. 
+
+**Exercise 1: Download the R markdown template, clean your environment, and set the folhighing variables:**
+
+* `root_dir` - project folder
+* `low_store` - location of DEG results for the low toxicity compound
+* `high_store` - location of DEG results for the high toxicity compound
+
+```{r clean}
+# Clean environment
+rm(list=ls())
+
+# set variables 
+root_dir <- "C:/Users/Bärbel Smit/Universiteit Leiden/BOO 2025 - BOO CDS Giulia team - BOO CDS Giulia team/Students/Bärbel/project/barbelsmit_BOO/"
+
+
+low_store <- "DEG/DEGres_low.Rdata"
+high_store <- "DEG/DEGres_high.Rdata"
+```
+
+***
+
+## Packages
+
+In this script, we introduce a new package: `enrichR`, a package for gene set enrichment analysis that identifies biological pathways, gene ontology terms, and other functional annotations significantly associated with a given list of genes.
+
+**Exercise 2: Load `enrichR` and `tidyverse` into your R environment:**
+
+```{r load-packages, warning=F, message=F}
+#load packages
+library(tidyverse)
+library(enrichR)
+```
+
+***
+
+## Load data
+
+**Exercise 3: Load the DEG results R environment:**
+
+```{r load-data, warning=FALSE, message=FALSE}
+# load data
+load(paste0(root_dir, high_store))
+load(paste0(root_dir, low_store))
+```
+
+***
+
+# ORA
+
+## Databases
+
+When performing any type of gene set analysis, you need to specify the gene sets of interest. This is one of the pitfalls but also benefits of this type of analysis.
+
+**Exercise 4: Use `listEnrichrDbs()` and look at the gene set databases available. Select a few of interest and describe them:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  Sometimes a specific database has different version for different years. Try to select the most recent ones using `grepl`.
+
+</details>
+
+```{r}
+# filter the available Enrichr databases to those that include "202" in their libraryName, to find datasets from 2020 till now 
+listEnrichrDbs() %>% 
+  filter(grepl("202", libraryName))
+```
+
+* `MSigDB_Hallmark_2020`: gene sets curated by the Broad Institute from the Molecular Signatures Database (MSigDB), repesenting coherent biological states or processes aimed to reduce redundancy in gene set databases.
+* `TG_GATES_2020`: derived from the Toxicogenomics Project-Genomics Assisted Toxicity Evaluation System (TG-GATEs), this database links gene expression changes to specific chemical exposures in rodent and human hepatocytes, providing mechanistic insights into toxicity and drug safety.
+* `GO_Biological_Process_2025`, `GO_Cellular_Component_2025`, and `GO_Molecular_Function_2025` are part of the Gene Ontology (GO) Consortium, and capture structured biological processes (e.g. inflammatory response), subcellular locations (e.g. mitochondrial matrix), and molecular activities (e.g. ATP binding), respectively.
+* `WikiPathways_2024_Human` is an open-source, community-curated collection of human biological pathways hosted by the WikiPathways project, aimed at enhancing transparency and collaboration in pathway annotation across a range of processes and diseases. 
+* `Reactome_Pathways_2024` is a peer-reviewed and manually curated database of human pathways developed by the Reactome Consortium, emphasizing detailed molecular interactions and regulatory mechanisms across signalling, metabolism, and disease.
+* `KEGG_2021_Human` is developed by the Kyoto Encyclopedia of Genes and Genomes (KEGG) and contains human pathway maps integrating genomic, chemical, and functional data to support systems-level understanding of cellular and organismal functions.
+
+***
+
+## DEG List
+
+In order to run ORA you need a list of genes of interest (your DEGs).
+
+**Exercise 5: Make a DEG list for each of the two compounds. How many DEGs do you have for each?**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  If you compound shows a dose response, you may want to select genes at a particular concentration of interest.
+
+</details>
+
+```{r}
+# Get unique significant DEGs from the high tox group
+deg_high <- unique((res_high %>% 
+               filter(sig == T))$gene_symbol)
+
+# Get unique significant DEGs from the low tox group
+deg_low <- unique((res_low %>% 
+               filter(sig == T))$gene_symbol)
+```
+
+There are 351 DEGs for the high toxicity compound (Theophylline) and 3333 for the low toxicity one (Metformin).
+
+***
+
+## Enrichr
+
+The `enrichr` function performs over-representation analysis (ORA) using a list of genes in each of the databases specified by the `databases` argument, returning a list.
+
+**Exercise 6: Run `enrichr` using the selected databases and inspect the output for each compound. Are there any pathways you expected?:**
+
+<details>
+  <summary><strong>Hint</strong></summary>
+
+  You can use `bind_rows()` to convert lists into data frames and make inspecting the output easier.
+
+</details>
+
+```{r}
+# Run enrichment analysis using the latest versions of Gene Ontology (GO), Reactome, and KEGG.
+ora_high <- enrichr(deg_high,
+                       c("GO_Biological_Process_2025",
+                         "GO_Molecular_Function_2025",
+                         "Reactome_Pathways_2024",
+                         "KEGG_2021_Human"))
+
+# Combine the multiple enrichment result data frames into a single unified table
+ora_high <- bind_rows(ora_high)
+
+# Filter for statistically significant pathways (adjusted p-value ≤ 0.05)
+ora_high %>% filter(Adjusted.P.value <= 0.05)
+```
+
+There are 100 enriched terms in the DEGs from the high toxicity compound (theophylline). 
+
+*`translation`
+*`Cytoplasmic Translation`
+*`Ribosomal Small Subunit Biogenesis`
+*`Ribonucleoprotein Complex Biogenesis`
+These are all related to protein synthesis, and theophylline has known effects on cAMP levels, via inhibition of phosphodiesterases, and modulation of translation through signaling pathways like mTOR and PKA, especially at high concentrations.
+
+*`gene expression` and `Macromolecule Biosynthetic Process` are broad pathways but still consistent with increased transcription or translation, which might result from stress responses or metabolic adaptation after drug exposure.
+
+*`Proton Motive Force-Driven ATP Synthesis`, `Proton Motive Force-Driven Mitochondrial ATP Synthesis` and `Oxidative Phosphorylation` point to mitochondrial activity and energy metabolism (involving ATP). Theophylline metabolism occurs in the liver via CYP enzymes, which rely on mitochondrial support. It can induce some mitochondrial stress or increase energy demand, possibly triggering changes in oxidative phosphorylation.
+
+
+
+***
+
+```{r}
+# Run enrichment analysis using the latest versions of Gene Ontology (GO), Reactome, and KEGG.
+ora_low <- enrichr(deg_low,
+                       c("GO_Biological_Process_2025",
+                         "GO_Molecular_Function_2025",
+                         "Reactome_Pathways_2024",
+                         "KEGG_2021_Human"))
+
+# Combine the multiple enrichment result data frames into a single unified table
+ora_low <- bind_rows(ora_low)
+
+# Filter for statistically significant pathways (adjusted p-value ≤ 0.05)
+ora_low %>% filter(Adjusted.P.value <= 0.05)
+```
+
+There are 597 enriched terms in the DEGs from the low toxicity compound (metformin).  
+
+***
+
+## Plots
+
+## Bar plots
+
+Using `geom_col`, we can visualize the results for each of the compounds.
+
+**Exercise 7: Take a look at the top enriched terms for each compound:**
+
+```{r}
+ora_high %>% 
+  arrange(Adjusted.P.value, P.value) %>% 
+  head(15) %>%
+  mutate(log10p = -log10(P.value)) %>% 
+  separate(Overlap, 
+           sep="/", 
+           into=c("Genes_found", "Size"),
+           remove=F) %>% 
+  mutate(Size = as.numeric(Size)) %>% 
+  ggplot(aes(y=reorder(Term, log10p))) + 
+  geom_col(aes(x=log10p, fill = Size),
+           color='black') +
+  scale_fill_gradient(
+    low = "#00008b",   # Light blue
+    high = "#add8e6"   # Dark blue
+  ) +
+  ylab('') + xlab('-log10p') + ggtitle("Top ten enriched terms: ") +
+  scale_y_discrete(labels = function(x) str_wrap(x, width = 30)) +
+  theme_bw() +
+  theme(axis.text.y = element_text(size=7))
+```
+```{r}
+# Show table of top 15 pathways
+ora_high %>% 
+  arrange(Adjusted.P.value, P.value) %>% 
+  head(15) %>%
+  mutate(log10p = -log10(P.value)) %>% 
+  separate(Overlap, 
+           sep="/", 
+           into=c("Genes_found", "Size"),
+           remove=F) %>% 
+  mutate(Size = as.numeric(Size))
+```
+
+
+```{r}
+# Define threshold
+fdr_threshold <- 0.05
+
+ora_plot_data <- ora_high %>%
+  arrange(Adjusted.P.value) %>%
+  mutate(rank = row_number(),
+         log10p = -log10(P.value),
+         top15 = ifelse(rank <= 15, "Top 15", "Others"))
+fdr_cutoff_rank <- min(ora_plot_data$rank[ora_plot_data$Adjusted.P.value > fdr_threshold], na.rm = TRUE)
+```
+
+```{r}
+ggplot(ora_plot_data, aes(x = rank, y = log10p, color = top15)) + 
+  geom_line() +
+  geom_point(size = 2) +
+  geom_vline(xintercept = fdr_cutoff_rank, linetype = "dotted", color = "red") +
+  scale_color_manual(values = c("Top 15" = "blue", "Others" = "grey50")) +
+  theme_minimal() +
+  ggtitle("Significance drop-off across terms") +
+  xlab("Ranked Pathway") + 
+  ylab("-log10(p-value)") +
+  theme(legend.title = element_blank())
+
+```
+
+
+*Amino acid metabolism and metabolism*: Since the liver is a metabolic center, it is expected to see enhanced amino acid metabolism pathways in hepatocytes following theophylline administration.  Theophylline is metabolized by cytochrome P450 enzymes in the liver, and as part of its effects on liver function, it may change amino acid turnover or affect hepatic metabolic pathways.
+*Translation and elongation pathways*: When under stress or medication, liver cells frequently modify the production of proteins.  Theophylline may cause minor cellular stress or trigger signaling cascades that affect the machinery involved in protein translation, which would explain the observed enrichment.This is supported by the enrichment of processes such as the formation of a pool of free 40S ribosomal subunits, eukaryotic translation termination, cytoplasmic translation, and elongation pathways.
+*NMD & mRNA surveillance*: In response to stress or injury, hepatocytes can initiate mRNA quality control and maintain high fidelity in protein synthesis.  NMD pathway enrichment makes sense because drug exposure frequently modifies these pathways.
+*Response to amino acid deficiency*: Hepatocytes may activate the GCN2 pathway in response to theophylline, which may indicate changes in amino acid availability or metabolic stress. GCN2 activation is a well-known nutrient/stress sensor.
+*Selenoamino acid metabolism*: The liver is essential for both antioxidant defense and selenium metabolism.  The enrichment of selenoamino acid metabolism may be explained by theophylline's effects on oxidative stress and redox homeostasis.
+*Fatty Acid Metabolism and Macromolecule Biosynthesis*: Theophylline has been shown to influence fatty acid metabolism in hepatocytes. It can increase the release of free fatty acids and modulate lipid synthesis pathways. These effects are closely linked with peptide chain elongation and macromolecule biosynthetic processes, suggesting coordinated adjustments in lipid and protein metabolism during drug exposure.
+
+
+```{r}
+ora_low %>% 
+  arrange(Adjusted.P.value, P.value) %>% 
+  head(15) %>%
+  mutate(log10p = -log10(P.value)) %>% 
+  separate(Overlap, 
+           sep="/", 
+           into=c("Genes_found", "Size"),
+           remove=F) %>% 
+  mutate(Size = as.numeric(Size),
+         Genes = str_wrap(Genes, width = 10)) %>% 
+  ggplot(aes(y=reorder(Term, log10p))) + 
+  geom_col(aes(x=log10p, fill = Size),
+           color='black') +
+  scale_fill_gradient(
+    low = "#00008b" ,   # Light blue
+    high = "#add8e6"   # Dark blue
+  ) +
+  ylab('') + xlab('-log10p') + ggtitle("Top ten enriched terms: ") +
+  scale_y_discrete(labels = function(x) str_wrap(x, width = 30)) +
+  theme_bw() +
+  theme(axis.text.y = element_text(size=7))
+```
+```{r}
+ora_plot_data_low <- ora_low %>%
+  arrange(Adjusted.P.value) %>%
+  mutate(rank = row_number(),
+         log10p = -log10(P.value),
+         top15 = ifelse(rank <= 15, "Top 15", "Others"))
+fdr_cutoff_rank_low <- min(ora_plot_data_low$rank[ora_plot_data_low$Adjusted.P.value > fdr_threshold], na.rm = TRUE)
+```
+
+```{r}
+ggplot(ora_plot_data_low, aes(x = rank, y = log10p, color = top15)) + 
+  geom_line() +
+  geom_point(size = 2) +
+  geom_vline(xintercept = fdr_cutoff_rank_low, linetype = "dotted", color = "red") +
+  geom_hline(yintercept = 5, linetype = "dashed", color = "darkgreen") +
+  scale_color_manual(values = c("Top 15" = "blue", "Others" = "grey50")) +
+  theme_minimal() +
+  ggtitle("Significance drop-off across terms") +
+  xlab("Ranked Pathway") + 
+  ylab("-log10(p-value)") +
+  theme(legend.title = element_blank())
+
+```
+ORA following metformin exposure reveals strong enrichment in pathways related to rRNA processing, ribosome biogenesis, translation, and RNA metabolism. These results align well with metformin’s established MoA, activation of AMPK and downstream inhibition of mTORC1 signaling, which collectively suppress global protein synthesis and ribosomal output. This shift reflects the drug’s energy-conserving effect, where cells prioritize maintenance over growth and proliferation.
+
+More specifically, several enriched terms point to regulation of translation machinery. These include *GTP hydrolysis* and *joining of the 60S ribosomal subunit*, a crucial step in translation initiation, and *cap-dependent translation initiation*, which governs most eukaryotic mRNA translation under normal conditions. *Enrichment in eukaryotic translation initiation* and *a-mediated translational silencing of ceruloplasmin expression* further supports the idea that metformin exerts selective control over protein synthesis at multiple regulatory levels.
+
+In parallel, the *enrichment of ribonucleoprotein complex biogenesis* and broader *RNA metabolic processes* suggests a coordinated suppression or remodeling of ribosome assembly and mRNA processing pathways. Together, these findings highlight metformin’s role in reshaping the translational and ribosomal landscape of the cell, reinforcing its effect as a metabolic stressor that promotes cellular adaptation through translational repression.
+
+***
+
+## Upset plot
+
+You may also want to visualize the top enriched terms for both compounds together.
+
+**Exercise: Use `geom_tile()` to do this:**
+
+First we select terms to use in the plot (top 10 for each compound):
+
+```{r}
+top_terms <- c((ora_high %>% head(15))$Term, (ora_low %>% head(15))$Term)
+top_terms
+```
+
+***
+
+Then we bind the results together, making a new variable specifying if the compound is high or low toxicity:
+
+```{r}
+ora_high$Toxicity <- "High"
+ora_low$Toxicity <- "Low"
+
+ora_both <- rbind(ora_high, ora_low)
+ora_both
+```
+
+Then, we can make the plot:
+
+```{r}
+ora_both %>% 
+  filter(Term %in% top_terms) %>% 
+  ggplot(aes(y=Term, x=Toxicity)) +
+  geom_tile(color="grey50", fill="grey90", linewidth = 0.3) +
+  geom_point(aes(fill=Adjusted.P.value, size=Odds.Ratio), shape=21, color='black') +
+  ylab("") +
+  scale_y_discrete(labels = function(x) str_wrap(x, width = 50),
+                   expand=c(0,0)) +
+  scale_x_discrete(expand=c(0,0)) +
+  scale_fill_gradientn(colors = c('lightpink', 'purple')) +
+  ggtitle('Top enriched terms in both compounds:') +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size=6),
+    panel.background = element_rect(fill='white', color='grey50'),
+    panel.grid = element_blank()
+  )
+```
+
+The dots represent enrichment of specific terms, where the size indicates the odds ratio (larger dots mean stronger associations), and color reflects the adjusted p-value (pink signifies more significant enrichment, while purple indicates less significance).
+
+We can see that the enrichment of terms is greater (in terms of significance and effect size) in the high toxicity compound. For Theophylline, there are 6 dots that are larger than the rest. The enrichment of pathways such as *ATP biosynthesis*, *proton motive force-driven mitochondrial ATP synthesis*, and *oxidative phosphorylation* points to a pronounced effect on cellular energy metabolism. These processes are central to mitochondrial function, suggesting that theophylline may modulate energy production efficiency or mitochondrial activity. This could reflect either a compensatory increase in ATP demand due to drug-induced stress or direct interference with mitochondrial bioenergetics.
+
+Additionally, the upregulation of *cytoplasmic translation* and *regulation of transcription by RNA polymerase I* indicates increased activity in protein synthesis and ribosomal gene expression. These pathways are typically associated with high metabolic activity and biosynthetic capacity. Their enrichment may reflect an adaptive cellular response aimed at maintaining proteostasis or could point to stress-induced remodeling of transcriptional and translational programs. Together, these findings suggest that theophylline impacts both mitochondrial energy production and core gene expression machinery, potentially reshaping hepatocyte function under pharmacological exposure.
+
+For Metformin on the other hand, (smaller odds) the enrichment of pathways such as *ribosomal large subunit biosynthesis*, *rRNA processing*, and *rRNA metabolic processing* highlights a strong impact on protein synthesis. These processes are important for the assembly and function of ribosomes, which are essential for cellular growth and proliferation.
+
+Metformin is well known to activate AMPK and inhibit mTORC1, a key regulator of ribosome biogenesis and translation. The observed enrichment may reflect a disruption or downregulation of these processes as part of a broader energy-conserving response. Suppression of ribosomal production and rRNA maturation aligns with metformin’s role in reducing anabolic activity under metabolic stress, redirecting resources away from growth-related functions toward cellular maintenance and survival. These findings reinforce the concept that metformin induces a transcriptional program consistent with reduced biosynthetic load and enhanced energy efficiency.
+
+Conversely, metformin’s selective impact on ribosome assembly and rRNA processing is largely absent in the theophylline response. This divergence underscores the distinct cellular strategies triggered by each compound: metformin enforcing a growth-suppressive, energy-preserving state, while theophylline elicits a more energy-generating, transcriptionally active response, potentially tied to stimulation or cellular stress.
+
+***
+
+# Session Info
+
+```{r session-info}
+library(sessioninfo)
+
+session_info()
+```
+
+***
+
