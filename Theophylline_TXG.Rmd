@@ -1,0 +1,179 @@
+---
+title: "TXG-MAPr"
+author: "Bärbel Smit"
+date: "`r Sys.Date()`"
+output: html_document
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+## Clean
+```{r clean}
+# Clean environment
+rm(list=ls())
+
+# Assign the appropriate file and path strings to the specified variables
+root_dir <- "C:/Users/Bärbel Smit/Universiteit Leiden/BOO 2025 - BOO CDS Giulia team - BOO CDS Giulia team/Students/Bärbel/project/barbelsmit_BOO/"
+pearcor <- file.path(root_dir, "input", "hPHH_TXG-MAPr_experiment_correlation_pearson.txt")
+modules <- file.path(root_dir, "input", "moduleTable.txt")
+
+```
+
+
+## Packages
+```{r}
+#load packages
+library(tidyverse)
+library(ggrepel)
+library(ggplot2)
+library(dplyr)
+library(ComplexHeatmap)
+library(circlize)
+```
+
+
+
+```{r}
+# Load data.table package
+
+library(data.table)
+
+```
+ 
+## Load data
+
+
+```{r}
+# Load data
+data_module <- fread("moduleTable.txt")
+
+```
+
+```{r}
+data_txg<-fread("hPHH_TXG-MAPr_eg_score.txt")
+```
+
+##Filter for compounds of interest
+```{r}
+
+filtered_data <- data_module %>%
+  filter(grepl("cs1130", sample_id, ignore.case = TRUE) | 
+         grepl("DOXORUBICIN", sample_id, ignore.case = TRUE)) %>%
+  select(sample_id, module, eg_score)
+
+# View result
+print(filtered_data)
+```
+ 
+```{r}
+
+filtered_data2 <- data_txg %>%
+  filter(grepl("cs1130", experiment, ignore.case = TRUE) | 
+         grepl("DOXORUBICIN", experiment, ignore.case = TRUE)) %>%
+  select(sample_id, module, eg_score)
+
+# View result
+print(filtered_data2)
+
+```
+
+##Filter for modules of interest
+```{r}
+
+filtered_data2_module <- filtered_data2 %>%
+  filter(grepl("327|356|386|250|307|203|272", module))
+
+```
+
+```{r}
+filtered_data_module <- filtered_data %>%
+  filter(grepl("327|356|386|250|307|203|272", module))
+```
+
+##Significant EG scores
+```{r}
+filtered_data_module_strict <- filtered_data_module %>%
+  filter(eg_score >= 2 | eg_score <= -2)
+```
+
+
+##Combine data
+```{r}
+combined_data <- bind_rows(filtered_data2_module, filtered_data_module_strict)
+print (combined_data)
+```
+
+##Heatmap
+```{r}
+ggplot(combined_data, aes(x = sample_id, y = factor(module), fill = eg_score)) +
+  geom_tile(color = "white") +   # white grid lines
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(x = "Sample ID", y = "Module", fill = "EG Score", 
+       title = "Heatmap of EG Scores by Module and Sample") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+##Filter most similar version of doxorubicin
+```{r}
+filtered_data2_dox <- filtered_data2_module %>%
+  filter(grepl("TG_HPHH_SINGLE_DOXORUBICIN_T2_C3", sample_id))
+```
+
+```{r}
+combined_data_cor <- bind_rows(filtered_data2_dox, filtered_data_module_strict)
+print (combined_data_cor)
+```
+
+
+```{r}
+wide_data <- combined_data_cor %>%
+  pivot_wider(names_from = sample_id, values_from = eg_score)
+```
+
+```{r}
+head(wide_data)
+```
+
+##Scatterplot
+```{r}
+ggplot(wide_data, aes(x = `uploadFile1_CS1130_SINGLE_24_7`, y = `TG_HPHH_SINGLE_DOXORUBICIN_T2_C3`)) +
+  geom_point(color = "darkblue", size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(x = "EG Score (Theophylline)", y = "EG Score (Doxorubicin)",
+       title = "Correlation Scatter Plot") +
+  theme_minimal()
+```
+```{r}
+wide_data %>% 
+  
+  ggplot(aes(x = uploadFile1_CS1130_SINGLE_24_7, y = TG_HPHH_SINGLE_DOXORUBICIN_T2_C3 , 
+              
+             color = module)) +
+  geom_point(size = 2) +
+  
+
+  ggtitle("Correlation Scatter Plot") +
+  theme_bw()
+```
+
+##Pearson correlation
+```{r}
+cor_val <- cor(wide_data$uploadFile1_CS1130_SINGLE_24_7, wide_data$TG_HPHH_SINGLE_DOXORUBICIN_T2_C3, use = "complete.obs")
+print(cor_val)
+```
+
+# Session Info
+
+```{r session-info}
+library(sessioninfo)
+
+session_info()
+```
+
+
